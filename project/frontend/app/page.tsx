@@ -108,7 +108,7 @@ export default function LearnTubeMain() {
     setVideoId(id);
     setIsLoading(true);
     try {
-      const response = await fetch(`http://127.0.0.1:8000/api/transcript?video_url=${videoUrl}`);
+      const response = await fetch(`https://learntube-backend-mqtg.onrender.com/api/transcript?video_url=${videoUrl}`);
       const data = await response.json();
       setTranscript(response.ok ? data.transcript : []);
     } catch {
