@@ -63,6 +63,7 @@ Thumbs.db
 node_modules/
 .next/
 venv/
+.venv/
 project/frontend/node_modules/
 project/frontend/.next/
-project/backend/venv/
+project/backend/.venv/
