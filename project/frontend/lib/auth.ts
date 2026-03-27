@@ -132,13 +132,13 @@ export async function logSession(params: {
     mins_to_add: params.durationMins,
   }).catch(() => {
     // RPC না থাকলে manual update
-    supabase
+    return supabase
       .from('profiles')
       .select('total_mins')
       .eq('id', params.userId)
       .single()
       .then(({ data }) => {
-        supabase
+        return supabase
           .from('profiles')
           .update({ total_mins: (data?.total_mins ?? 0) + params.durationMins })
           .eq('id', params.userId)
@@ -159,14 +159,14 @@ export async function logSession(params: {
     mins_to_add: params.durationMins,
   }).catch(() => {
     // Fallback: manually update
-    supabase
+    return supabase
       .from('daily_goals')
       .select('actual_mins')
       .eq('user_id', params.userId)
       .eq('goal_date', today)
       .single()
       .then(({ data }) => {
-        supabase
+        return supabase
           .from('daily_goals')
           .update({ actual_mins: (data?.actual_mins ?? 0) + params.durationMins })
           .eq('user_id', params.userId)

@@ -3,8 +3,8 @@ export const dynamic = 'force-dynamic';
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
-import { 
-  BookOpen, PlayCircle, Flame, 
+import {
+  BookOpen, PlayCircle, Flame,
   Volume2, PlusCircle, Code, Terminal, Menu, Loader2, CheckCircle2, Search, X
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
@@ -35,7 +35,7 @@ interface VideoResult {
 // ── Quick search suggestions ──────────────────────────────────
 const SUGGESTIONS: Record<string, string[]> = {
   language: ['BBC English learning', 'English conversation practice', 'English grammar basics', 'Deutsch lernen A1', 'Easy German'],
-  coding:   ['JavaScript tutorial', 'React for beginners', 'Python basics', 'Next.js crash course', 'TypeScript tutorial'],
+  coding: ['JavaScript tutorial', 'React for beginners', 'Python basics', 'Next.js crash course', 'TypeScript tutorial'],
 };
 
 export default function LearnTubeMain() {
@@ -279,16 +279,16 @@ export default function LearnTubeMain() {
             <div className="bg-black border border-[#1f222c] rounded-3xl overflow-hidden aspect-video shadow-2xl relative">
               {videoId
                 ? <iframe
-                    key={videoId}
-                    className="w-full h-full"
-                    src={`https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1`}
-                    allowFullScreen
-                    title={videoTitle || 'LearnTube Player'}
-                  />
+                  key={videoId}
+                  className="w-full h-full"
+                  src={`https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1`}
+                  allowFullScreen
+                  title={videoTitle || 'LearnTube Player'}
+                />
                 : <div className="absolute inset-0 flex flex-col items-center justify-center opacity-20">
-                    <PlayCircle size={80} strokeWidth={1} />
-                    <p className="mt-4 font-black tracking-[0.3em] text-xs">READY FOR LEARNING</p>
-                  </div>
+                  <PlayCircle size={80} strokeWidth={1} />
+                  <p className="mt-4 font-black tracking-[0.3em] text-xs">READY FOR LEARNING</p>
+                </div>
               }
             </div>
 
