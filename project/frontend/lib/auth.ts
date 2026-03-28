@@ -1,5 +1,4 @@
 // frontend/lib/auth.ts
-// Auth helper functions — সারা app এ ব্যবহার করো
 
 import { supabase } from './supabase'
 
@@ -8,24 +7,15 @@ export async function signUp(email: string, password: string, fullName: string) 
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: {
-      data: {
-        full_name: fullName,
-      },
-    },
+    options: { data: { full_name: fullName } },
   })
-
   if (error) throw error
   return data
 }
 
 // ── SIGN IN ──────────────────────────────────────────────────
 export async function signIn(email: string, password: string) {
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  })
-
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
   if (error) throw error
   return data
 }
@@ -38,27 +28,23 @@ export async function signOut() {
 
 // ── GET CURRENT USER ─────────────────────────────────────────
 export async function getCurrentUser() {
-  const { data: { user }, error } = await supabase.auth.getUser()
-  if (error) return null
+  const { data: { user } } = await supabase.auth.getUser()
   return user
 }
 
 // ── GET PROFILE ──────────────────────────────────────────────
 export async function getProfile(userId: string) {
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', userId)
     .single()
-
-  if (error) return null
   return data
 }
 
 // ── UPDATE STREAK ────────────────────────────────────────────
-// প্রতিদিন login করলে অথবা session log করলে call করো
 export async function updateStreak(userId: string) {
-  const today = new Date().toISOString().split('T')[0] // YYYY-MM-DD
+  const today = new Date().toISOString().split('T')[0]
 
   const { data: profile } = await supabase
     .from('profiles')
@@ -68,25 +54,17 @@ export async function updateStreak(userId: string) {
 
   if (!profile) return
 
-  const lastActive = profile.last_active_date
+  if (profile.last_active_date === today) return
+
   const yesterday = new Date()
   yesterday.setDate(yesterday.getDate() - 1)
   const yesterdayStr = yesterday.toISOString().split('T')[0]
 
-  let newStreak = profile.streak_count
+  const newStreak = profile.last_active_date === yesterdayStr
+    ? (profile.streak_count ?? 0) + 1
+    : 1
 
-  if (lastActive === today) {
-    // আজকে already active — কিছু করতে হবে না
-    return
-  } else if (lastActive === yesterdayStr) {
-    // গতকাল active ছিল — streak বাড়াও
-    newStreak = profile.streak_count + 1
-  } else {
-    // missed day — streak reset
-    newStreak = 1
-  }
-
-  const newLongest = Math.max(newStreak, profile.longest_streak)
+  const newLongest = Math.max(newStreak, profile.longest_streak ?? 0)
 
   await supabase
     .from('profiles')
@@ -111,7 +89,7 @@ export async function logSession(params: {
 }) {
   const today = new Date().toISOString().split('T')[0]
 
-  // Session insert
+  // 1. Session insert
   const { error: sessionError } = await supabase
     .from('sessions')
     .insert({
@@ -126,55 +104,44 @@ export async function logSession(params: {
 
   if (sessionError) throw sessionError
 
-  // Profile total_mins update
-  await supabase.rpc('increment_total_mins', {
-    user_id_input: params.userId,
-    mins_to_add: params.durationMins,
-  }).catch(() => {
-    // RPC না থাকলে manual update
-    return supabase
-      .from('profiles')
-      .select('total_mins')
-      .eq('id', params.userId)
-      .single()
-      .then(({ data }) => {
-        return supabase
-          .from('profiles')
-          .update({ total_mins: (data?.total_mins ?? 0) + params.durationMins })
-          .eq('id', params.userId)
-      })
-  })
+  // 2. Profile total_mins — direct update (no RPC)
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('total_mins')
+    .eq('id', params.userId)
+    .single()
 
-  // Daily goal update
+  if (profile) {
+    await supabase
+      .from('profiles')
+      .update({ total_mins: (profile.total_mins ?? 0) + params.durationMins })
+      .eq('id', params.userId)
+  }
+
+  // 3. Daily goal upsert + update actual_mins
   await supabase
     .from('daily_goals')
-    .upsert({
-      user_id: params.userId,
-      goal_date: today,
-    }, { onConflict: 'user_id,goal_date', ignoreDuplicates: true })
+    .upsert(
+      { user_id: params.userId, goal_date: today },
+      { onConflict: 'user_id,goal_date', ignoreDuplicates: true }
+    )
 
-  await supabase.rpc('update_daily_goal_mins', {
-    user_id_input: params.userId,
-    date_input: today,
-    mins_to_add: params.durationMins,
-  }).catch(() => {
-    // Fallback: manually update
-    return supabase
+  const { data: goal } = await supabase
+    .from('daily_goals')
+    .select('actual_mins')
+    .eq('user_id', params.userId)
+    .eq('goal_date', today)
+    .single()
+
+  if (goal) {
+    await supabase
       .from('daily_goals')
-      .select('actual_mins')
+      .update({ actual_mins: (goal.actual_mins ?? 0) + params.durationMins })
       .eq('user_id', params.userId)
       .eq('goal_date', today)
-      .single()
-      .then(({ data }) => {
-        return supabase
-          .from('daily_goals')
-          .update({ actual_mins: (data?.actual_mins ?? 0) + params.durationMins })
-          .eq('user_id', params.userId)
-          .eq('goal_date', today)
-      })
-  })
+  }
 
-  // Streak update
+  // 4. Streak update
   await updateStreak(params.userId)
 }
 
@@ -189,18 +156,15 @@ export async function saveVocabWord(params: {
   sourceVideoId?: string
   sourceVideoTitle?: string
 }) {
-  // Duplicate check
   const { data: existing } = await supabase
     .from('vocab_words')
     .select('id')
     .eq('user_id', params.userId)
     .eq('word', params.word.toLowerCase())
     .eq('language', params.language ?? 'en')
-    .single()
+    .maybeSingle()
 
-  if (existing) {
-    return { duplicate: true, data: existing }
-  }
+  if (existing) return { duplicate: true, data: existing }
 
   const { data, error } = await supabase
     .from('vocab_words')
@@ -231,7 +195,7 @@ export async function saveVocabWord(params: {
   if (goal) {
     await supabase
       .from('daily_goals')
-      .update({ actual_words: goal.actual_words + 1 })
+      .update({ actual_words: (goal.actual_words ?? 0) + 1 })
       .eq('user_id', params.userId)
       .eq('goal_date', today)
   }
@@ -247,9 +211,7 @@ export async function getVocabWords(userId: string, language?: string) {
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
 
-  if (language) {
-    query = query.eq('language', language)
-  }
+  if (language) query = query.eq('language', language)
 
   const { data, error } = await query
   if (error) throw error
@@ -269,8 +231,6 @@ export async function getProgressStats(userId: string) {
   const vocab = vocabRes.data ?? []
   const sessions = sessionsRes.data ?? []
   const lastFlash = flashRes.data?.[0]
-
-  // Last 30 days active
   const activeDays = [...new Set(sessions.map(s => s.session_date))]
 
   return {
