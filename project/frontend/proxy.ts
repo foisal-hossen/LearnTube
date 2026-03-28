@@ -1,13 +1,10 @@
-// frontend/middleware.ts
-// Auth middleware — protected routes আর session refresh
+// frontend/proxy.ts
+// Next.js 16 — middleware.ts থেকে proxy.ts rename করা হয়েছে
 
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-// এই routes গুলো login ছাড়া দেখা যাবে না
 const PROTECTED_ROUTES = ['/learn', '/vocab', '/progress', '/flashcard', '/settings']
-
-// এই routes গুলো login থাকলে redirect হবে
 const AUTH_ROUTES = ['/login', '/signup']
 
 export async function middleware(request: NextRequest) {
@@ -32,12 +29,9 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // Session refresh — IMPORTANT: এই call টা সবসময় করতে হবে
   const { data: { user } } = await supabase.auth.getUser()
-
   const pathname = request.nextUrl.pathname
 
-  // Protected route-এ না থাকলে redirect to login
   const isProtectedRoute = PROTECTED_ROUTES.some(route => pathname.startsWith(route))
   if (isProtectedRoute && !user) {
     const loginUrl = new URL('/login', request.url)
@@ -45,10 +39,9 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
-  // Login/signup page-এ থাকলে redirect to learn
   const isAuthRoute = AUTH_ROUTES.some(route => pathname.startsWith(route))
   if (isAuthRoute && user) {
-    return NextResponse.redirect(new URL('/learn', request.url))
+    return NextResponse.redirect(new URL('/', request.url))
   }
 
   return supabaseResponse
