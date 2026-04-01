@@ -1,187 +1,190 @@
 "use client";
 export const dynamic = 'force-dynamic';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import {
-  BookOpen, PlayCircle, Flame,
-  Volume2, PlusCircle, Code, Terminal, Menu, Loader2, CheckCircle2, Search, X
+  BookOpen, PlayCircle, Flame, Volume2, PlusCircle,
+  Loader2, CheckCircle2, Search, X, Sun, Moon,
+  Clock, Trash2, ChevronRight
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
 // ── Types ────────────────────────────────────────────────────
-interface TranscriptItem {
-  text: string;
-  start: number;
-  duration: number;
-}
-
-interface SelectedWord {
-  word: string;
-  phonetic: string;
-  definition: string;
-  example: string;
-}
-
+interface TranscriptItem { text: string; start: number; duration: number; }
+interface SelectedWord { word: string; phonetic: string; definition: string; example: string; }
 interface VideoResult {
-  videoId: string;
-  title: string;
-  channel: string;
-  thumbnail: string;
-  description: string;
-  publishedAt: string;
+  videoId: string; title: string; channel: string;
+  thumbnail: string; description: string; publishedAt: string;
 }
 
-// ── Quick search suggestions ──────────────────────────────────
-const SUGGESTIONS: Record<string, string[]> = {
-  language: ['BBC English learning', 'English conversation practice', 'English grammar basics', 'Deutsch lernen A1', 'Easy German'],
-  coding: ['JavaScript tutorial', 'React for beginners', 'Python basics', 'Next.js crash course', 'TypeScript tutorial'],
-};
+const MAX_RECENT = 8;
 
 export default function LearnTubeMain() {
-  const [learningMode, setLearningMode] = useState<'language' | 'coding'>('language');
+  const [dark, setDark] = useState(true);
 
-  // Search state
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<VideoResult[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  // Search
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<VideoResult[]>([]);
+  const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [hasSearched, setHasSearched] = useState(false);
-  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
+  const [nextPage, setNextPage] = useState<string | null>(null);
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const [showRecent, setShowRecent] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
 
-  // Player state
+  // Player
   const [videoId, setVideoId] = useState('');
   const [videoTitle, setVideoTitle] = useState('');
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
-  const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
+  const [loadingTranscript, setLoadingTranscript] = useState(false);
 
-  // Learning state
+  // Dictionary
   const [selectedWord, setSelectedWord] = useState<SelectedWord | null>(null);
-  const [isDictionaryLoading, setIsDictionaryLoading] = useState(false);
-  const [codeNote, setCodeNote] = useState('');
+  const [dictLoading, setDictLoading] = useState(false);
   const [savedCount, setSavedCount] = useState({ vocab: 0, snippets: 0 });
-  const [toast, setToast] = useState<string | null>(null);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'info' } | null>(null);
 
-  // ── Theme ─────────────────────────────────────────────────
-  const theme = {
-    accent: learningMode === 'language' ? '#f5a623' : '#3b82f6',
-    accentLight: learningMode === 'language' ? 'rgba(245,166,35,0.15)' : 'rgba(59,130,246,0.15)',
-    border: learningMode === 'language' ? 'rgba(245,166,35,0.3)' : 'rgba(59,130,246,0.3)',
-    buttonText: learningMode === 'language' ? '#0d0f14' : '#ffffff',
+  // ── Theme CSS vars ────────────────────────────────────────
+  const t = dark ? {
+    bg: '#0a0c10', bg2: '#0f1117', bg3: '#161a24', bg4: '#1c2130',
+    border: '#232836', border2: '#2d3347',
+    text: '#e8eaf2', text2: '#8b93a8', text3: '#4a5168',
+    accent: '#f5a623', accentBg: 'rgba(245,166,35,0.1)', accentBorder: 'rgba(245,166,35,0.25)',
+    card: '#0f1117', shadow: '0 4px 32px rgba(0,0,0,0.5)',
+  } : {
+    bg: '#f4f5f7', bg2: '#ffffff', bg3: '#f0f1f4', bg4: '#e8eaf0',
+    border: '#dde0ea', border2: '#c8ccda',
+    text: '#1a1d28', text2: '#5a6075', text3: '#9097b0',
+    accent: '#d4880f', accentBg: 'rgba(212,136,15,0.08)', accentBorder: 'rgba(212,136,15,0.3)',
+    card: '#ffffff', shadow: '0 4px 24px rgba(0,0,0,0.08)',
   };
 
-  // ── Fetch stats ───────────────────────────────────────────
+  // Load recent searches
+  useEffect(() => {
+    const saved = localStorage.getItem('lt_recent');
+    if (saved) setRecentSearches(JSON.parse(saved));
+  }, []);
+
+  // Close recent on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setShowRecent(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
   const fetchStats = useCallback(async () => {
-    const { count: vCount } = await supabase
-      .from('vocab_words')
-      .select('*', { count: 'exact', head: true });
-    const { count: sCount } = await supabase
-      .from('snippets')
-      .select('*', { count: 'exact', head: true });
-    setSavedCount({ vocab: vCount || 0, snippets: sCount || 0 });
+    const [{ count: v }, { count: s }] = await Promise.all([
+      supabase.from('vocab_words').select('*', { count: 'exact', head: true }),
+      supabase.from('snippets').select('*', { count: 'exact', head: true }),
+    ]);
+    setSavedCount({ vocab: v || 0, snippets: s || 0 });
   }, []);
 
   useEffect(() => { fetchStats(); }, [fetchStats]);
 
-  // ── Toast ─────────────────────────────────────────────────
-  const showToast = (msg: string) => {
-    setToast(msg);
+  const showToast = (msg: string, type: 'success' | 'info' = 'success') => {
+    setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
   };
 
-  // ── YouTube Search ────────────────────────────────────────
-  const searchVideos = useCallback(async (q: string, pageToken?: string) => {
+  const addToRecent = (q: string) => {
+    const updated = [q, ...recentSearches.filter(r => r !== q)].slice(0, MAX_RECENT);
+    setRecentSearches(updated);
+    localStorage.setItem('lt_recent', JSON.stringify(updated));
+  };
+
+  const removeRecent = (q: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updated = recentSearches.filter(r => r !== q);
+    setRecentSearches(updated);
+    localStorage.setItem('lt_recent', JSON.stringify(updated));
+  };
+
+  const clearRecent = () => {
+    setRecentSearches([]);
+    localStorage.removeItem('lt_recent');
+  };
+
+  // ── Search ────────────────────────────────────────────────
+  const doSearch = useCallback(async (q: string, pageToken?: string) => {
     if (!q.trim()) return;
-    setIsSearching(true);
+    setSearching(true);
     setSearchError('');
+    setShowRecent(false);
 
     try {
-      const lang = learningMode === 'language' ? 'en' : 'en';
-      const params = new URLSearchParams({ q, lang, ...(pageToken && { pageToken }) });
+      const params = new URLSearchParams({ q, lang: 'en', ...(pageToken && { pageToken }) });
       const res = await fetch(`/api/youtube/search?${params}`);
       const data = await res.json();
-
       if (!res.ok) throw new Error(data.error || 'Search failed');
 
-      if (pageToken) {
-        setSearchResults(prev => [...prev, ...data.videos]);
-      } else {
-        setSearchResults(data.videos);
-      }
-      setNextPageToken(data.nextPageToken || null);
+      setResults(prev => pageToken ? [...prev, ...data.videos] : data.videos);
+      setNextPage(data.nextPageToken || null);
       setHasSearched(true);
+      addToRecent(q);
     } catch (err: unknown) {
       setSearchError(err instanceof Error ? err.message : 'Search failed');
     } finally {
-      setIsSearching(false);
+      setSearching(false);
     }
-  }, [learningMode]);
+  }, [addToRecent]);
 
-  function handleSearchSubmit(e: React.FormEvent) {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    searchVideos(searchQuery);
-  }
+    if (query.trim()) doSearch(query);
+  };
 
-  function handleSuggestion(s: string) {
-    setSearchQuery(s);
-    searchVideos(s);
-  }
+  const pickRecent = (q: string) => {
+    setQuery(q);
+    doSearch(q);
+  };
 
   // ── Load video ────────────────────────────────────────────
   const loadVideo = async (video: VideoResult) => {
     setVideoId(video.videoId);
     setVideoTitle(video.title);
     setTranscript([]);
-    setIsLoadingTranscript(true);
-
+    setLoadingTranscript(true);
     try {
       const res = await fetch(
         `https://learntube-backend-mqtg.onrender.com/api/transcript?video_url=https://www.youtube.com/watch?v=${video.videoId}`
       );
       const data = await res.json();
       setTranscript(res.ok ? data.transcript : []);
-    } catch {
-      setTranscript([]);
-    } finally {
-      setIsLoadingTranscript(false);
-    }
+    } catch { setTranscript([]); }
+    finally { setLoadingTranscript(false); }
   };
 
-  // ── Dictionary lookup ─────────────────────────────────────
+  // ── Dictionary ────────────────────────────────────────────
   const lookupWord = async (word: string) => {
-    if (learningMode !== 'language') return;
-    const cleanWord = word.replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, '').toLowerCase();
-    if (!cleanWord) return;
-    setIsDictionaryLoading(true);
+    const clean = word.replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, '').toLowerCase();
+    if (!clean || clean.length < 2) return;
+    setDictLoading(true);
     try {
-      const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${cleanWord}`);
+      const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${clean}`);
       const data = await res.json();
-      if (data && data[0]) {
+      if (data?.[0]) {
         setSelectedWord({
           word: data[0].word,
-          phonetic: data[0].phonetic || '/no phonetic/',
+          phonetic: data[0].phonetic || '',
           definition: data[0].meanings[0].definitions[0].definition,
-          example: data[0].meanings[0].definitions[0].example || 'Study hard to see results.',
+          example: data[0].meanings[0].definitions[0].example || '',
         });
       }
-    } catch {
-      // silent fail
-    } finally {
-      setIsDictionaryLoading(false);
-    }
+    } catch { /**/ }
+    finally { setDictLoading(false); }
   };
 
-  // ── Save to vocab (vocab_words table) ────────────────────
   const saveToVocab = async () => {
     if (!selectedWord) return;
     const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
-      showToast('Please login to save vocabulary!');
-      return;
-    }
-
+    if (!user?.id) return;
     const { error } = await supabase.from('vocab_words').insert({
       user_id: user.id,
       word: selectedWord.word,
@@ -192,346 +195,309 @@ export default function LearnTubeMain() {
       source_video_id: videoId || null,
       source_video_title: videoTitle || null,
     });
-
-    if (!error) {
-      showToast(`✓ "${selectedWord.word}" added to your library!`);
-      fetchStats();
-    } else if (error.code === '23505') {
-      showToast('Already in your library!');
-    }
+    if (!error) { showToast(`"${selectedWord.word}" saved!`); fetchStats(); }
+    else if (error.code === '23505') showToast('Already saved!', 'info');
   };
 
-  // ── Save snippet ──────────────────────────────────────────
-  const saveSnippet = async () => {
-    if (!codeNote || !videoId) return;
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
-      showToast('Please login to save code snippets!');
-      return;
-    }
-
-    const { error } = await supabase.from('snippets').insert([{
-      user_id: user.id,
-      title: `Note from ${videoTitle || videoId}`,
-      code: codeNote,
-      language: 'javascript',
-      source_video_id: videoId,
-      source_video_title: videoTitle,
-    }]);
-
-    if (!error) {
-      showToast('Code snippet saved!');
-      setCodeNote('');
-      fetchStats();
-    }
+  // ── Styles (CSS-in-JS via inline) ────────────────────────
+  const s = {
+    page: { minHeight: '100vh', background: t.bg, color: t.text, fontFamily: "'DM Sans', sans-serif", transition: 'background 0.3s, color 0.3s' },
+    nav: { background: t.bg2, borderBottom: `1px solid ${t.border}`, padding: '0 28px', height: '58px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky' as const, top: 0, zIndex: 100, boxShadow: t.shadow },
+    logo: { fontSize: '20px', fontWeight: 800, letterSpacing: '-0.5px', display: 'flex', alignItems: 'center', gap: '2px', fontFamily: "'Syne', sans-serif" },
+    main: { maxWidth: '1400px', margin: '0 auto', padding: '24px 24px', display: 'grid', gridTemplateColumns: '1fr 380px', gap: '20px' } as React.CSSProperties,
   };
 
-  // ═══════════════════════════════════════════════════════════
-  // RENDER
-  // ═══════════════════════════════════════════════════════════
   return (
-    <div className="min-h-screen bg-[#0b0d11] text-[#e8eaf0] font-sans">
+    <>
+      <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+      <div style={s.page}>
 
-      {/* Toast */}
-      {toast && (
-        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-50 bg-[#1a1e2a] border border-[#4ecb8d4d] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-bottom-5">
-          <CheckCircle2 className="text-[#4ecb8d]" size={20} />
-          <p className="text-sm font-bold tracking-tight">{toast}</p>
-        </div>
-      )}
-
-      {/* Nav */}
-      <nav className="flex items-center justify-between px-6 py-4 bg-[#11141b] border-b border-[#1f222c] sticky top-0 z-50 shadow-xl">
-        <div className="text-2xl font-black flex items-center gap-1">
-          <span style={{ color: theme.accent }}>Learn</span>Tube
-        </div>
-
-        <div className="hidden lg:flex bg-[#1a1e2a] p-1 rounded-xl border border-[#252836]">
-          <button
-            onClick={() => setLearningMode('language')}
-            className={`px-8 py-2 rounded-lg text-xs font-bold transition-all ${learningMode === 'language' ? 'bg-[#f5a623] text-black' : 'text-[#8890a4]'}`}
-          >LANGUAGE</button>
-          <button
-            onClick={() => setLearningMode('coding')}
-            className={`px-8 py-2 rounded-lg text-xs font-bold transition-all ${learningMode === 'coding' ? 'bg-[#3b82f6] text-white' : 'text-[#8890a4]'}`}
-          >PROGRAMMING</button>
-        </div>
-
-        <div className="flex items-center gap-4">
-          <div className="px-4 py-1.5 rounded-full text-sm font-bold border flex items-center gap-2"
-            style={{ backgroundColor: theme.accentLight, borderColor: theme.border, color: theme.accent }}>
-            <Flame size={16} fill={theme.accent} /> 5 Day Streak
+        {/* Toast */}
+        {toast && (
+          <div style={{ position: 'fixed', bottom: '28px', left: '50%', transform: 'translateX(-50%)', zIndex: 999, background: t.bg3, border: `1px solid ${toast.type === 'success' ? 'rgba(78,203,141,0.4)' : t.border}`, borderRadius: '12px', padding: '12px 20px', display: 'flex', alignItems: 'center', gap: '10px', boxShadow: t.shadow, color: toast.type === 'success' ? '#4ecb8d' : t.text2, fontSize: '14px', fontWeight: 500, whiteSpace: 'nowrap' }}>
+            <CheckCircle2 size={16} />
+            {toast.msg}
           </div>
-          <button className="lg:hidden" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}>
-            <Menu style={{ color: theme.accent }} />
-          </button>
-        </div>
-      </nav>
+        )}
 
-      <main className="max-w-7xl mx-auto p-4 md:p-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        {/* Nav */}
+        <nav style={s.nav}>
+          <div style={s.logo}>
+            <span style={{ color: t.accent }}>Learn</span>
+            <span style={{ color: t.text }}>Tube</span>
+          </div>
 
-          {/* ── Left: Player + Transcript ── */}
-          <div className="lg:col-span-8 space-y-6">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            {/* Streak */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: t.accentBg, border: `1px solid ${t.accentBorder}`, borderRadius: '20px', padding: '6px 14px', fontSize: '13px', fontWeight: 600, color: t.accent }}>
+              <Flame size={14} fill={t.accent} />
+              5 Day Streak
+            </div>
+
+            {/* Dark/Light toggle */}
+            <button
+              onClick={() => setDark(!dark)}
+              style={{ width: '38px', height: '38px', borderRadius: '10px', border: `1px solid ${t.border}`, background: t.bg3, color: t.text2, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }}
+            >
+              {dark ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
+          </div>
+        </nav>
+
+        {/* Main layout */}
+        <div style={s.main}>
+
+          {/* ── LEFT: Player + Transcript ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
             {/* Player */}
-            <div className="bg-black border border-[#1f222c] rounded-3xl overflow-hidden aspect-video shadow-2xl relative">
-              {videoId
-                ? <iframe
+            <div style={{ aspectRatio: '16/9', background: '#000', borderRadius: '16px', overflow: 'hidden', border: `1px solid ${t.border}`, position: 'relative' }}>
+              {videoId ? (
+                <iframe
                   key={videoId}
-                  className="w-full h-full"
                   src={`https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1`}
                   allowFullScreen
-                  title={videoTitle || 'LearnTube Player'}
+                  title={videoTitle}
+                  style={{ width: '100%', height: '100%', border: 'none' }}
                 />
-                : <div className="absolute inset-0 flex flex-col items-center justify-center opacity-20">
-                  <PlayCircle size={80} strokeWidth={1} />
-                  <p className="mt-4 font-black tracking-[0.3em] text-xs">READY FOR LEARNING</p>
+              ) : (
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', opacity: 0.2 }}>
+                  <PlayCircle size={72} strokeWidth={1} color={t.text} />
+                  <p style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '3px', color: t.text }}>READY FOR LEARNING</p>
                 </div>
-              }
+              )}
             </div>
 
             {/* Transcript */}
-            <div className="bg-[#11141b] border border-[#1f222c] rounded-3xl p-6 md:p-8">
-              <h3 className="text-[#555d72] uppercase text-[10px] font-black tracking-widest mb-6 flex items-center gap-2">
-                {learningMode === 'coding' ? <Terminal size={14} /> : <BookOpen size={14} />}
-                {learningMode === 'coding' ? 'Concepts' : 'Click words to translate'}
-              </h3>
+            <div style={{ background: t.bg2, border: `1px solid ${t.border}`, borderRadius: '16px', padding: '20px 24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                <BookOpen size={13} color={t.text3} />
+                <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '2px', color: t.text3, textTransform: 'uppercase' }}>Transcript — Click words to look up</span>
+              </div>
 
-              <div className="text-base md:text-xl leading-[2.3] text-[#8890a4] h-96 overflow-y-auto pr-4 custom-scrollbar">
-                {isLoadingTranscript ? (
-                  <div className="flex items-center justify-center h-full opacity-40">
-                    <Loader2 className="animate-spin mr-2" />
-                    <span className="text-xs font-bold uppercase tracking-widest">Loading transcript...</span>
+              <div style={{ height: '220px', overflowY: 'auto', fontSize: '15px', lineHeight: 2.2, color: t.text2, paddingRight: '8px' }}>
+                {loadingTranscript ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '10px', opacity: 0.5 }}>
+                    <Loader2 size={18} style={{ animation: 'spin 0.7s linear infinite' }} />
+                    <span style={{ fontSize: '12px', fontWeight: 600, letterSpacing: '1px' }}>Loading transcript...</span>
                   </div>
                 ) : transcript.length > 0 ? (
                   transcript.map((item, i) => (
                     <span
                       key={i}
                       onClick={() => lookupWord(item.text)}
-                      className="cursor-pointer hover:text-white px-1 rounded transition-all"
-                      style={{ borderBottom: `1px solid ${theme.accent}1a` }}
+                      style={{ cursor: 'pointer', padding: '1px 3px', borderRadius: '4px', transition: 'all 0.15s', display: 'inline' }}
+                      onMouseEnter={e => { (e.target as HTMLElement).style.background = t.accentBg; (e.target as HTMLElement).style.color = t.accent; }}
+                      onMouseLeave={e => { (e.target as HTMLElement).style.background = 'transparent'; (e.target as HTMLElement).style.color = t.text2; }}
                     >{item.text} </span>
                   ))
                 ) : (
-                  <div className="flex flex-col items-center justify-center h-full opacity-20 text-center">
-                    <BookOpen size={48} strokeWidth={1} className="mb-3" />
-                    <p className="text-xs font-black uppercase tracking-widest">
-                      {videoId ? 'No transcript available' : 'Select a video to see transcript'}
-                    </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '10px', opacity: 0.2 }}>
+                    <BookOpen size={40} strokeWidth={1} />
+                    <p style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '2px', textTransform: 'uppercase' }}>{videoId ? 'No transcript available' : 'Select a video to see transcript'}</p>
                   </div>
                 )}
               </div>
             </div>
           </div>
 
-          {/* ── Right: Search + Dictionary ── */}
-          <div className="lg:col-span-4 space-y-6">
+          {/* ── RIGHT: Search + Dict + Stats ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
-            {/* ── Search Box ── */}
-            <div className="bg-[#11141b] border border-[#1f222c] rounded-3xl p-6">
-              <h3 className="text-[#555d72] uppercase text-[10px] font-black tracking-widest mb-5 flex items-center gap-2">
-                <Search size={14} /> Find Videos
-              </h3>
+            {/* Search Card */}
+            <div style={{ background: t.bg2, border: `1px solid ${t.border}`, borderRadius: '16px', padding: '20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                <Search size={13} color={t.text3} />
+                <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '2px', color: t.text3, textTransform: 'uppercase' }}>Find Videos</span>
+              </div>
 
-              {/* Search input */}
-              <form onSubmit={handleSearchSubmit} className="flex gap-2 mb-4">
-                <div className="flex-1 flex items-center gap-2 bg-[#0b0d11] border border-[#1f222c] rounded-xl px-3 py-2.5 focus-within:border-opacity-60 transition-all"
-                  style={{ '--tw-border-opacity': 1 } as React.CSSProperties}>
-                  <Search size={14} className="text-[#555d72] flex-shrink-0" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    placeholder={learningMode === 'language' ? 'Search English videos...' : 'Search coding tutorials...'}
-                    className="flex-1 bg-transparent text-sm text-white placeholder-[#555d72] outline-none"
-                  />
-                  {searchQuery && (
-                    <button type="button" onClick={() => { setSearchQuery(''); setSearchResults([]); setHasSearched(false); }}>
-                      <X size={14} className="text-[#555d72] hover:text-white" />
-                    </button>
-                  )}
-                </div>
-                <button
-                  type="submit"
-                  disabled={isSearching || !searchQuery.trim()}
-                  className="px-4 py-2.5 rounded-xl font-black text-xs transition-all disabled:opacity-40"
-                  style={{ backgroundColor: theme.accent, color: theme.buttonText }}
-                >
-                  {isSearching ? <Loader2 size={14} className="animate-spin" /> : 'Go'}
-                </button>
-              </form>
+              {/* Search Input */}
+              <div ref={searchRef} style={{ position: 'relative' }}>
+                <form onSubmit={handleSubmit} style={{ display: 'flex', gap: '8px' }}>
+                  <div
+                    style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', background: t.bg3, border: `1px solid ${query ? t.accentBorder : t.border}`, borderRadius: '10px', padding: '10px 14px', transition: 'border-color 0.2s' }}
+                  >
+                    <Search size={14} color={t.text3} style={{ flexShrink: 0 }} />
+                    <input
+                      value={query}
+                      onChange={e => setQuery(e.target.value)}
+                      onFocus={() => setShowRecent(true)}
+                      placeholder="Search videos..."
+                      style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: t.text, fontSize: '14px', fontFamily: 'inherit' }}
+                    />
+                    {query && (
+                      <button type="button" onClick={() => { setQuery(''); setResults([]); setHasSearched(false); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: t.text3, display: 'flex', padding: 0 }}>
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={searching || !query.trim()}
+                    style={{ background: t.accent, color: '#0d0f14', border: 'none', borderRadius: '10px', padding: '10px 18px', fontSize: '13px', fontWeight: 700, cursor: 'pointer', fontFamily: "'Syne', sans-serif", opacity: (!query.trim() || searching) ? 0.5 : 1, transition: 'opacity 0.2s', flexShrink: 0 }}
+                  >
+                    {searching ? <Loader2 size={14} style={{ animation: 'spin 0.7s linear infinite' }} /> : 'Go'}
+                  </button>
+                </form>
 
-              {/* Suggestions */}
-              {!hasSearched && (
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {SUGGESTIONS[learningMode].map(s => (
-                    <button
-                      key={s}
-                      onClick={() => handleSuggestion(s)}
-                      className="text-[10px] px-2.5 py-1 bg-[#1a1e2a] border border-[#252836] rounded-lg text-[#8890a4] hover:text-white hover:border-[#555d72] transition-all"
-                    >{s}</button>
-                  ))}
-                </div>
-              )}
+                {/* Recent searches dropdown */}
+                {showRecent && recentSearches.length > 0 && !hasSearched && (
+                  <div style={{ position: 'absolute', top: 'calc(100% + 8px)', left: 0, right: 0, background: t.bg2, border: `1px solid ${t.border}`, borderRadius: '12px', overflow: 'hidden', zIndex: 50, boxShadow: t.shadow }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px 8px', borderBottom: `1px solid ${t.border}` }}>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: t.text3, letterSpacing: '1px', textTransform: 'uppercase' }}>Recent</span>
+                      <button onClick={clearRecent} style={{ background: 'none', border: 'none', color: t.text3, cursor: 'pointer', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px', padding: 0 }}>
+                        <Trash2 size={11} /> Clear
+                      </button>
+                    </div>
+                    {recentSearches.map((r, i) => (
+                      <div
+                        key={i}
+                        onClick={() => pickRecent(r)}
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 14px', cursor: 'pointer', transition: 'background 0.15s' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = t.bg3)}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
+                          <Clock size={13} color={t.text3} />
+                          <span style={{ fontSize: '13px', color: t.text2 }}>{r}</span>
+                        </div>
+                        <button
+                          onClick={(e) => removeRecent(r, e)}
+                          style={{ background: 'none', border: 'none', color: t.text3, cursor: 'pointer', display: 'flex', padding: '2px' }}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               {/* Error */}
               {searchError && (
-                <p className="text-red-400 text-xs bg-red-400/10 border border-red-400/20 rounded-xl px-3 py-2 mb-3">
+                <div style={{ marginTop: '10px', background: 'rgba(240,90,90,0.1)', border: '1px solid rgba(240,90,90,0.25)', borderRadius: '10px', padding: '10px 14px', fontSize: '13px', color: '#f05a5a' }}>
                   ⚠ {searchError}
-                </p>
+                </div>
               )}
 
               {/* Results */}
-              {searchResults.length > 0 && (
-                <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1 custom-scrollbar">
-                  {searchResults.map(video => (
+              {results.length > 0 && (
+                <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '380px', overflowY: 'auto', paddingRight: '4px' }}>
+                  {results.map(video => (
                     <button
                       key={video.videoId}
                       onClick={() => loadVideo(video)}
-                      className={`flex gap-3 w-full p-2.5 rounded-2xl border text-left transition-all group
-                        ${videoId === video.videoId
-                          ? 'border-opacity-60 bg-opacity-5'
-                          : 'border-[#1f222c] hover:border-[#252836] hover:bg-[#1a1e2a]'
-                        }`}
-                      style={videoId === video.videoId ? { borderColor: theme.accent, backgroundColor: theme.accentLight } : {}}
+                      style={{ display: 'flex', gap: '12px', padding: '10px', borderRadius: '12px', border: `1px solid ${videoId === video.videoId ? t.accentBorder : t.border}`, background: videoId === video.videoId ? t.accentBg : 'transparent', cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s', width: '100%' }}
+                      onMouseEnter={e => { if (videoId !== video.videoId) { (e.currentTarget).style.background = t.bg3; } }}
+                      onMouseLeave={e => { if (videoId !== video.videoId) { (e.currentTarget).style.background = 'transparent'; } }}
                     >
-                      {/* Thumbnail */}
-                      <div className="relative w-[90px] h-[52px] rounded-xl overflow-hidden bg-[#1a1e2a] flex-shrink-0">
-                        <Image
-                          src={video.thumbnail}
-                          alt={video.title}
-                          fill
-                          className="object-cover"
-                          unoptimized
-                        />
-                        <div className={`absolute inset-0 flex items-center justify-center transition-opacity
-                          ${videoId === video.videoId ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-                          <div className="w-6 h-6 rounded-full bg-black/60 flex items-center justify-center">
-                            <PlayCircle size={14} className="text-white ml-0.5" />
-                          </div>
-                        </div>
+                      <div style={{ position: 'relative', width: '90px', height: '54px', borderRadius: '8px', overflow: 'hidden', flexShrink: 0, background: t.bg3 }}>
+                        <Image src={video.thumbnail} alt={video.title} fill style={{ objectFit: 'cover' }} unoptimized />
                       </div>
-
-                      {/* Info */}
-                      <div className="flex-1 min-w-0">
-                        <p className={`text-xs font-bold leading-tight line-clamp-2 mb-0.5
-                          ${videoId === video.videoId ? '' : 'text-[#e8eaf0]'}`}
-                          style={videoId === video.videoId ? { color: theme.accent } : {}}>
-                          {video.title}
-                        </p>
-                        <p className="text-[10px] text-[#555d72]">{video.channel}</p>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ fontSize: '12px', fontWeight: 600, color: videoId === video.videoId ? t.accent : t.text, lineHeight: 1.4, marginBottom: '4px', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{video.title}</p>
+                        <p style={{ fontSize: '11px', color: t.text3 }}>{video.channel}</p>
                       </div>
                     </button>
                   ))}
 
-                  {/* Load more */}
-                  {nextPageToken && (
+                  {nextPage && (
                     <button
-                      onClick={() => searchVideos(searchQuery, nextPageToken)}
-                      disabled={isSearching}
-                      className="w-full py-2 text-[10px] font-bold text-[#555d72] border border-[#1f222c] rounded-xl hover:border-[#252836] hover:text-[#8890a4] transition-all disabled:opacity-40 uppercase tracking-wider"
+                      onClick={() => doSearch(query, nextPage)}
+                      disabled={searching}
+                      style={{ width: '100%', padding: '9px', fontSize: '12px', fontWeight: 600, color: t.text2, background: 'none', border: `1px solid ${t.border}`, borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', transition: 'border-color 0.2s' }}
+                      onMouseEnter={e => (e.currentTarget.style.borderColor = t.border2)}
+                      onMouseLeave={e => (e.currentTarget.style.borderColor = t.border)}
                     >
-                      {isSearching ? 'Loading...' : 'Load more'}
+                      {searching ? <Loader2 size={13} style={{ animation: 'spin 0.7s linear infinite' }} /> : <><ChevronRight size={13} /> Load more</>}
                     </button>
                   )}
                 </div>
               )}
 
-              {/* Empty search result */}
-              {hasSearched && searchResults.length === 0 && !isSearching && (
-                <div className="text-center py-6 opacity-30">
-                  <Search size={32} className="mx-auto mb-2" strokeWidth={1} />
-                  <p className="text-xs font-black uppercase tracking-widest">No results found</p>
+              {/* Empty */}
+              {hasSearched && results.length === 0 && !searching && (
+                <div style={{ textAlign: 'center', padding: '28px', opacity: 0.3 }}>
+                  <Search size={28} style={{ margin: '0 auto 8px' }} />
+                  <p style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>No results found</p>
                 </div>
               )}
             </div>
 
-            {/* ── Dictionary / Code Vault ── */}
-            <div className="rounded-3xl p-0.5" style={{ background: `linear-gradient(to bottom, ${theme.accent}, transparent)` }}>
-              <div className="bg-[#11141b] rounded-3xl p-6 md:p-8 min-h-80">
-                <div className="flex items-center justify-between mb-8 text-[#555d72]">
-                  <h3 className="uppercase text-[10px] font-black tracking-widest">
-                    {learningMode === 'coding' ? 'Code Vault' : 'Dictionary'}
-                  </h3>
-                  {learningMode === 'coding' ? <Code size={20} /> : <Volume2 size={20} />}
+            {/* Dictionary Card */}
+            <div style={{ background: t.bg2, border: `1px solid ${t.border}`, borderRadius: '16px', padding: '20px', borderTop: `3px solid ${t.accent}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Volume2 size={13} color={t.text3} />
+                  <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '2px', color: t.text3, textTransform: 'uppercase' }}>Dictionary</span>
                 </div>
+                {selectedWord && (
+                  <button onClick={() => setSelectedWord(null)} style={{ background: 'none', border: 'none', color: t.text3, cursor: 'pointer', display: 'flex' }}>
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
 
-                {learningMode === 'coding' ? (
-                  <div className="space-y-4">
-                    <textarea
-                      className="w-full bg-[#0b0d11] border border-[#1f222c] rounded-2xl p-5 text-xs font-mono text-[#4ecb8d] h-48 focus:outline-none resize-none"
-                      placeholder="// Save code here..."
-                      value={codeNote}
-                      onChange={e => setCodeNote(e.target.value)}
-                    />
+              <div style={{ minHeight: '140px' }}>
+                {dictLoading ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '120px', opacity: 0.4, gap: '10px' }}>
+                    <Loader2 size={18} style={{ animation: 'spin 0.7s linear infinite' }} />
+                    <span style={{ fontSize: '12px', fontWeight: 600 }}>Looking up...</span>
+                  </div>
+                ) : selectedWord ? (
+                  <div>
+                    <h2 style={{ fontSize: '28px', fontWeight: 800, color: t.accent, fontFamily: "'Syne', sans-serif", marginBottom: '2px' }}>{selectedWord.word}</h2>
+                    {selectedWord.phonetic && <p style={{ fontSize: '12px', color: t.text3, marginBottom: '12px', fontFamily: 'monospace' }}>{selectedWord.phonetic}</p>}
+                    <p style={{ fontSize: '13px', color: t.text2, lineHeight: 1.7, marginBottom: '8px' }}><span style={{ fontWeight: 700, color: t.text3, marginRight: '6px' }}>DEF</span>{selectedWord.definition}</p>
+                    {selectedWord.example && <p style={{ fontSize: '12px', color: t.text3, fontStyle: 'italic', lineHeight: 1.6 }}><span style={{ fontWeight: 700, fontStyle: 'normal', marginRight: '6px' }}>EX</span>&ldquo;{selectedWord.example}&rdquo;</p>}
                     <button
-                      onClick={saveSnippet}
-                      disabled={!codeNote || !videoId}
-                      className="w-full py-4 rounded-2xl font-black text-sm uppercase disabled:opacity-40 transition-all"
-                      style={{ backgroundColor: theme.accent, color: theme.buttonText }}
-                    >Save Snippet</button>
+                      onClick={saveToVocab}
+                      style={{ width: '100%', marginTop: '14px', padding: '11px', background: t.accentBg, border: `1px solid ${t.accentBorder}`, borderRadius: '10px', color: t.accent, fontSize: '13px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', transition: 'background 0.2s', fontFamily: "'Syne', sans-serif" }}
+                      onMouseEnter={e => (e.currentTarget.style.background = `rgba(245,166,35,0.18)`)}
+                      onMouseLeave={e => (e.currentTarget.style.background = t.accentBg)}
+                    >
+                      <PlusCircle size={15} /> Save to Vocabulary
+                    </button>
                   </div>
                 ) : (
-                  <div className="space-y-6">
-                    {isDictionaryLoading ? (
-                      <div className="flex flex-col items-center justify-center h-40 opacity-40">
-                        <Loader2 className="animate-spin mb-2" />
-                        <p className="text-[10px] font-bold uppercase tracking-widest">Looking up...</p>
-                      </div>
-                    ) : selectedWord ? (
-                      <div className="animate-in slide-in-from-bottom-4 duration-500">
-                        <h2 className="text-4xl font-black mb-1 capitalize" style={{ color: theme.accent }}>{selectedWord.word}</h2>
-                        <p className="text-[#555d72] text-[10px] font-black tracking-[0.2em] mb-6 uppercase">{selectedWord.phonetic}</p>
-                        <div className="space-y-4 text-sm">
-                          <p><span className="text-[#555d72] font-bold mr-2">DEF:</span>{selectedWord.definition}</p>
-                          <p className="text-[#8890a4] italic"><span className="text-[#555d72] font-bold not-italic mr-2">EX:</span>&quot;{selectedWord.example}&quot;</p>
-                        </div>
-                        <button
-                          onClick={saveToVocab}
-                          className="w-full mt-8 py-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 uppercase transition-all hover:opacity-90"
-                          style={{ backgroundColor: theme.accent, color: theme.buttonText }}
-                        >
-                          <PlusCircle size={18} /> Add to Library
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center h-40 opacity-10 text-center">
-                        <BookOpen size={64} strokeWidth={1} className="mb-4" />
-                        <p className="text-[10px] font-black uppercase tracking-[0.3em]">Select words to learn</p>
-                      </div>
-                    )}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '120px', opacity: 0.2, gap: '10px' }}>
+                    <BookOpen size={36} strokeWidth={1} />
+                    <p style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '2px', textTransform: 'uppercase' }}>Click words in transcript</p>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* ── Activity ── */}
-            <div className="bg-[#11141b] border border-[#1f222c] rounded-3xl p-8 shadow-2xl">
-              <h3 className="uppercase text-[10px] font-black tracking-widest text-[#555d72] mb-8">Activity</h3>
-              <div className="space-y-4">
-                <div className="flex justify-between items-center bg-[#1a1e2a] p-4 rounded-2xl">
-                  <span className="text-[10px] font-black text-[#555d72] uppercase tracking-wider">Vocab</span>
-                  <span className="text-xl font-black" style={{ color: '#f5a623' }}>{savedCount.vocab}</span>
-                </div>
-                <div className="flex justify-between items-center bg-[#1a1e2a] p-4 rounded-2xl">
-                  <span className="text-[10px] font-black text-[#555d72] uppercase tracking-wider">Snippets</span>
-                  <span className="text-xl font-black" style={{ color: '#3b82f6' }}>{savedCount.snippets}</span>
-                </div>
+            {/* Activity */}
+            <div style={{ background: t.bg2, border: `1px solid ${t.border}`, borderRadius: '16px', padding: '18px 20px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '2px', color: t.text3, textTransform: 'uppercase', display: 'block', marginBottom: '14px' }}>Activity</span>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                {[
+                  { label: 'Vocab', value: savedCount.vocab, color: t.accent },
+                  { label: 'Snippets', value: savedCount.snippets, color: '#5b8cf5' },
+                ].map(item => (
+                  <div key={item.label} style={{ background: t.bg3, borderRadius: '12px', padding: '14px 16px', border: `1px solid ${t.border}` }}>
+                    <p style={{ fontSize: '11px', fontWeight: 700, color: t.text3, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '6px' }}>{item.label}</p>
+                    <p style={{ fontSize: '28px', fontWeight: 800, color: item.color, fontFamily: "'Syne', sans-serif", lineHeight: 1 }}>{item.value}</p>
+                  </div>
+                ))}
               </div>
             </div>
 
           </div>
         </div>
-      </main>
 
-      <style jsx global>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: #0b0d11; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #1f222c; border-radius: 10px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: ${theme.accent}; }
-      `}</style>
-    </div>
+        <style>{`
+          @keyframes spin { to { transform: rotate(360deg); } }
+          * { box-sizing: border-box; margin: 0; padding: 0; }
+          ::-webkit-scrollbar { width: 4px; }
+          ::-webkit-scrollbar-track { background: transparent; }
+          ::-webkit-scrollbar-thumb { background: ${t.border}; border-radius: 4px; }
+          @media (max-width: 900px) {
+            .main-grid { grid-template-columns: 1fr !important; }
+          }
+        `}</style>
+      </div>
+    </>
   );
 }
